@@ -17,10 +17,6 @@
 #include <mgba/internal/gba/sio/dolphin.h>
 #include <mgba/internal/gba/gba.h>
 #include <mgba/core/thread.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
 
 #include <switch.h>
 #include <EGL/egl.h>
@@ -138,11 +134,11 @@ bool attachDolphin(const struct Address *address) {
 }
 void detachDolphin(){
 	// if (platform() == mPLATFORM_GBA) {
-	if (true) {
+	if (GBASIODolphinIsConnected(&m_dolphin)) {
 		struct GBA* gba = (struct GBA*)(m_threadContext.core->board);
 		GBASIOSetDriver(&gba->sio, NULL, SIO_JOYBUS);
+		GBASIODolphinDestroy(&m_dolphin);
 	}
-	GBASIODolphinDestroy(&m_dolphin);
 }
 
 static struct mStereoSample audioBuffer[N_BUFFERS][BUFFER_SIZE / 4] __attribute__((__aligned__(0x1000)));
@@ -427,12 +423,10 @@ static void _gameLoaded(struct mGUIRunner* runner) {
 			dolphinAddress.ipv4 = stohi("192.168.1.30");
 
 			bool didAttach = attachDolphin(&dolphinAddress);
-			if (didAttach) { mCoreThreadReset(&m_threadContext); }
-			// if (!isDolphinConnected()){
-			// 	// failed to connect state
-			// } else {
-			// 	mCoreThreadReset(&m_threadContext);
-			// }
+			if (didAttach) { 
+				// TODO: Game needs to be reset to work
+				mCoreThreadReset(&m_threadContext); 
+			}
 		}
 	}
 
@@ -933,7 +927,8 @@ int main(int argc, char* argv[]) {
 	NWindow* window = nwindowGetDefault();
 	nwindowSetDimensions(window, 1920, 1080);
 
-	socketInitializeDefault();
+	// socketInitializeDefault();
+	SocketSubsystemInit();
 	nxlinkStdio();
 	eglInit();
 	romfsInit();
@@ -1115,7 +1110,7 @@ int main(int argc, char* argv[]) {
 				.submenu = 0,
 				.state = false,
 				.validStates = (const char*[]) {
-					"Off", "192.168.1.11"
+					"Off", "On"
 				},
 				.nStates = 2,
 			}
@@ -1170,6 +1165,8 @@ int main(int argc, char* argv[]) {
 			free(buffer[1]);
 		}
 	}
+	// TODO: wipe this config on restart
+	// runner.configExtra[5].state = false;	// Set Connect to Dolphin to Off by default
 
 	if (argc > 1) {
 		mGUILoadInputMaps(&runner);
@@ -1179,7 +1176,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	mGUIDeinit(&runner);
-	detachDolphin();
+	if (GBASIODolphinIsConnected(&m_dolphin)) detachDolphin();
 
 	audoutStopAudioOut();
 	GUIFontDestroy(font);
@@ -1191,6 +1188,7 @@ int main(int argc, char* argv[]) {
 	audoutExit();
 	romfsExit();
 	eglDeinit();
-	socketExit();
+	// socketExit();
+	SocketSubsystemDeinit();
 	return 0;
 }
