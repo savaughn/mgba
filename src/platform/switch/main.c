@@ -13,6 +13,14 @@
 #include <mgba-util/gui/font.h>
 #include <mgba-util/gui/menu.h>
 #include <mgba-util/vfs.h>
+#include <mgba-util/socket.h>
+#include <mgba/internal/gba/sio/dolphin.h>
+#include <mgba/internal/gba/gba.h>
+#include <mgba/core/thread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
 
 #include <switch.h>
 #include <EGL/egl.h>
@@ -115,6 +123,27 @@ static struct mGUIRunnerLux lightSensor;
 static float gyroZ = 0;
 static float tiltX = 0;
 static float tiltY = 0;
+static struct Address dolphinAddress;
+struct GBASIODolphin m_dolphin;
+struct mCore *core;
+struct mCoreThread m_threadContext;
+bool isDolphinConnected() { return !SOCKET_FAILED(m_dolphin.data); }
+bool attachDolphin(const struct Address *address) {
+	if (GBASIODolphinConnect(&m_dolphin, address, 0, 0)) {
+		struct GBA* gba = (struct GBA*)(m_threadContext.core->board);
+		GBASIOSetDriver(&gba->sio, &m_dolphin.d, SIO_JOYBUS);
+		return true;
+	}
+	return false;
+}
+void detachDolphin(){
+	// if (platform() == mPLATFORM_GBA) {
+	if (true) {
+		struct GBA* gba = (struct GBA*)(m_threadContext.core->board);
+		GBASIOSetDriver(&gba->sio, NULL, SIO_JOYBUS);
+	}
+	GBASIODolphinDestroy(&m_dolphin);
+}
 
 static struct mStereoSample audioBuffer[N_BUFFERS][BUFFER_SIZE / 4] __attribute__((__aligned__(0x1000)));
 
@@ -201,6 +230,43 @@ static void _drawEnd(void) {
 		eglSwapBuffers(s_display, s_surface);
 		framecount = 0;
 	}
+}
+
+uint32_t stohi(char *ip){
+	char c;
+	c = *ip;
+	unsigned int integer;
+	int val;
+	int i,j=0;
+	for (j=0;j<4;j++) {
+		if (!isdigit(c)){  //first char is 0
+			return (0);
+		}
+		val=0;
+		for (i=0;i<3;i++) {
+			if (isdigit(c)) {
+				val = (val * 10) + (c - '0');
+				c = *++ip;
+			} else
+				break;
+		}
+		if(val<0 || val>255){
+			return (0);	
+		}	
+		if (c == '.') {
+			integer=(integer<<8) | val;
+			c = *++ip;
+		} 
+		else if(j==3 && c == '\0'){
+			integer=(integer<<8) | val;
+			break;
+		}
+			
+	}
+	if(c != '\0'){
+		return (0);	
+	}
+	return (htonl(integer));
 }
 
 static uint32_t _pollInput(const struct mInputMap* map) {
@@ -316,6 +382,7 @@ static void _setup(struct mGUIRunner* runner) {
 	}
 
 	runner->core->setAudioBufferSize(runner->core, SAMPLES);
+	GBASIODolphinCreate(&m_dolphin);
 }
 
 static void _gameLoaded(struct mGUIRunner* runner) {
@@ -350,6 +417,22 @@ static void _gameLoaded(struct mGUIRunner* runner) {
 					runner->core->setPeripheral(runner->core, mPERIPH_GBA_LUMINANCE, &runner->luminanceSource.d);
 				}
 			}
+		}
+	}
+
+	if(mCoreConfigGetIntValue(&runner->config, "dolphinAddress", &fakeBool)) {
+		if(fakeBool) {
+			dolphinAddress.version = IPV4;
+			// dolphinAddress.ipv4 = ipv4_to_uint32("192.168.1.30");
+			dolphinAddress.ipv4 = stohi("192.168.1.30");
+
+			bool didAttach = attachDolphin(&dolphinAddress);
+			if (didAttach) { mCoreThreadReset(&m_threadContext); }
+			// if (!isDolphinConnected()){
+			// 	// failed to connect state
+			// } else {
+			// 	mCoreThreadReset(&m_threadContext);
+			// }
 		}
 	}
 
@@ -1026,8 +1109,18 @@ int main(int argc, char* argv[]) {
 				},
 				.nStates = 2
 			},
+			{
+				.title = "Connect to Dolphin",
+				.data = GUI_V_S("dolphinAddress"),
+				.submenu = 0,
+				.state = false,
+				.validStates = (const char*[]) {
+					"Off", "192.168.1.11"
+				},
+				.nStates = 2,
+			}
 		},
-		.nConfigExtra = 5,
+		.nConfigExtra = 6,
 		.setup = _setup,
 		.teardown = NULL,
 		.gameLoaded = _gameLoaded,
@@ -1043,6 +1136,7 @@ int main(int argc, char* argv[]) {
 		.running = _running
 	};
 	mGUIInit(&runner, "switch");
+	m_threadContext.core = runner.core;
 
 	_mapKey(&runner.params.keyMap, AUTO_INPUT, HidNpadButton_A, GUI_INPUT_SELECT);
 	_mapKey(&runner.params.keyMap, AUTO_INPUT, HidNpadButton_B, GUI_INPUT_BACK);
@@ -1085,6 +1179,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	mGUIDeinit(&runner);
+	detachDolphin();
 
 	audoutStopAudioOut();
 	GUIFontDestroy(font);
